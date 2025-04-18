@@ -5,11 +5,12 @@ const cors = require('cors');
 const app = express();
 app.use(cors({
   origin: 'http://localhost:3000',
-  methods: ['GET', 'POST'],
+  methods: ['GET', 'POST', 'DELETE'], // Added DELETE
   credentials: true
 }));
 app.use(express.json());
 
+// MongoDB Connection
 mongoose.connect('mongodb://localhost:27017/attendanceDB', {
   useNewUrlParser: true,
   useUnifiedTopology: true,
@@ -23,14 +24,15 @@ const userSchema = new mongoose.Schema({
 });
 const User = mongoose.model('User', userSchema);
 
-// Existing Schemas (Classes, Teachers, Students, Attendance) remain the same
+// Class Schema
 const classSchema = new mongoose.Schema({
   name: { type: String, required: true },
   subject: { type: String, required: true },
-  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true }, // Link to user
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 });
 const Class = mongoose.model('Class', classSchema);
 
+// Teacher Schema
 const teacherSchema = new mongoose.Schema({
   name: { type: String, required: true },
   subject: { type: String, required: true },
@@ -38,6 +40,7 @@ const teacherSchema = new mongoose.Schema({
 });
 const Teacher = mongoose.model('Teacher', teacherSchema);
 
+// Student Schema
 const studentSchema = new mongoose.Schema({
   name: { type: String, required: true },
   admissionNo: { type: String, required: true, unique: true },
@@ -47,6 +50,7 @@ const studentSchema = new mongoose.Schema({
 });
 const Student = mongoose.model('Student', studentSchema);
 
+// Attendance Schema
 const attendanceSchema = new mongoose.Schema({
   studentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Student', required: true },
   date: { type: Date, default: Date.now },
@@ -54,6 +58,16 @@ const attendanceSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 });
 const Attendance = mongoose.model('Attendance', attendanceSchema);
+
+// Middleware to authenticate userId
+const authenticateUser = (req, res, next) => {
+  const userId = req.headers['user-id'];
+  if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+    return res.status(401).json({ success: false, message: 'Unauthorized' });
+  }
+  req.userId = userId;
+  next();
+};
 
 // Authentication Endpoints
 app.post('/api/login', async (req, res) => {
@@ -77,31 +91,32 @@ app.post('/api/signup', async (req, res) => {
   res.json({ success: true, userId: newUser._id });
 });
 
-// Existing API Routes (updated with userId)
-app.get('/api/classes', async (req, res) => {
-  const classes = await Class.find();
+// GET Endpoints with Authentication
+app.get('/api/classes', authenticateUser, async (req, res) => {
+  const classes = await Class.find({ userId: req.userId });
   res.json(classes);
 });
 
-app.get('/api/teachers', async (req, res) => {
-  const teachers = await Teacher.find();
+app.get('/api/teachers', authenticateUser, async (req, res) => {
+  const teachers = await Teacher.find({ userId: req.userId });
   res.json(teachers);
 });
 
-app.get('/api/students', async (req, res) => {
-  const students = await Student.find();
+app.get('/api/students', authenticateUser, async (req, res) => {
+  const students = await Student.find({ userId: req.userId });
   res.json(students);
 });
 
-app.get('/api/attendance', async (req, res) => {
-  const attendance = await Attendance.find().populate('studentId');
+app.get('/api/attendance', authenticateUser, async (req, res) => {
+  const attendance = await Attendance.find({ userId: req.userId }).populate('studentId');
   res.json(attendance);
 });
 
-app.post('/api/classes', async (req, res) => {
+// POST Endpoints
+app.post('/api/classes', authenticateUser, async (req, res) => {
   try {
-    const { userId } = req.body; // Expect userId from frontend
-    const newClass = new Class({ ...req.body, userId });
+    const { name, subject } = req.body;
+    const newClass = new Class({ name, subject, userId: req.userId });
     await newClass.save();
     res.json(newClass);
   } catch (error) {
@@ -109,10 +124,10 @@ app.post('/api/classes', async (req, res) => {
   }
 });
 
-app.post('/api/teachers', async (req, res) => {
+app.post('/api/teachers', authenticateUser, async (req, res) => {
   try {
-    const { userId } = req.body;
-    const newTeacher = new Teacher({ ...req.body, userId });
+    const { name, subject } = req.body;
+    const newTeacher = new Teacher({ name, subject, userId: req.userId });
     await newTeacher.save();
     res.json(newTeacher);
   } catch (error) {
@@ -120,10 +135,16 @@ app.post('/api/teachers', async (req, res) => {
   }
 });
 
-app.post('/api/students', async (req, res) => {
+app.post('/api/students', authenticateUser, async (req, res) => {
   try {
-    const { userId } = req.body;
-    const newStudent = new Student({ ...req.body, userId });
+    const { name, admissionNo, class: studentClass, attendancePercentage } = req.body;
+    const newStudent = new Student({
+      name,
+      admissionNo,
+      class: studentClass,
+      attendancePercentage: parseFloat(attendancePercentage) || 0,
+      userId: req.userId,
+    });
     await newStudent.save();
     res.json(newStudent);
   } catch (error) {
@@ -131,14 +152,45 @@ app.post('/api/students', async (req, res) => {
   }
 });
 
-app.post('/api/attendance', async (req, res) => {
+app.post('/api/attendance', authenticateUser, async (req, res) => {
   try {
-    const { userId } = req.body;
-    const newAttendance = new Attendance({ ...req.body, userId });
+    const { studentId, status } = req.body;
+    const newAttendance = new Attendance({ studentId, status, userId: req.userId });
     await newAttendance.save();
     res.json(newAttendance);
   } catch (error) {
     res.status(400).json({ error: error.message });
+  }
+});
+
+// DELETE Endpoints
+app.delete('/api/classes/:id', authenticateUser, async (req, res) => {
+  const { id } = req.params;
+  const result = await Class.findOneAndDelete({ _id: id, userId: req.userId });
+  if (result) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ success: false, message: 'Class not found or unauthorized' });
+  }
+});
+
+app.delete('/api/teachers/:id', authenticateUser, async (req, res) => {
+  const { id } = req.params;
+  const result = await Teacher.findOneAndDelete({ _id: id, userId: req.userId });
+  if (result) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ success: false, message: 'Teacher not found or unauthorized' });
+  }
+});
+
+app.delete('/api/students/:id', authenticateUser, async (req, res) => {
+  const { id } = req.params;
+  const result = await Student.findOneAndDelete({ _id: id, userId: req.userId });
+  if (result) {
+    res.json({ success: true });
+  } else {
+    res.status(404).json({ success: false, message: 'Student not found or unauthorized' });
   }
 });
 
