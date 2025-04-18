@@ -13,6 +13,7 @@ const Dashboard = () => {
   const [studentsData, setStudentsData] = useState([]);
   const [formData, setFormData] = useState({ name: '', subject: '', topic: '', attendancePercentage: '' });
   const [renderKey, setRenderKey] = useState(Date.now());
+  const [selectedItem, setSelectedItem] = useState(null); // For editing
   const addButtonRef = useRef(null);
 
   useEffect(() => {
@@ -26,12 +27,10 @@ const Dashboard = () => {
     const userId = localStorage.getItem('userId');
     try {
       const res = await fetch(url, {
-        headers: { 'user-id': userId || '' }, // Pass userId in headers for filtering (adjust backend if needed)
+        headers: { 'user-id': userId || '' },
       });
-      console.log(`${type} fetch response status:`, res.status);
       if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
-      console.log(`${type} data received:`, data);
       if (type === 'classes') setClassesData(data);
       if (type === 'teachers') setTeachersData(data);
       if (type === 'students') setStudentsData(data);
@@ -42,12 +41,15 @@ const Dashboard = () => {
 
   const handleCardClick = (type) => {
     setShowModal({ ...showModal, [type]: true });
+    setSelectedItem(null); // Reset selected item when opening a new modal
   };
 
   const closeModal = () => {
+    setShowModal({ students: false, teachers: false, classes: false });
     setShowAddForm(false);
     setAddType(null);
     setFormData({ name: '', subject: '', topic: '', attendancePercentage: '' });
+    setSelectedItem(null);
     console.log('Modal closed, states reset');
   };
 
@@ -106,24 +108,58 @@ const Dashboard = () => {
     try {
       console.log('Sending to URL:', url, 'with data:', dataToSend);
       const response = await fetch(url, {
-        method: 'POST',
+        method: selectedItem ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(dataToSend),
       });
-      console.log('Response status:', response.status);
-      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`); // Fixed: Changed res.ok to response.ok
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const newEntry = await response.json();
       console.log('New entry received:', newEntry);
       await fetchData(addType || activeSection.replace('manage', ''));
       closeModal();
       setRenderKey(Date.now());
     } catch (error) {
-      console.error('Error adding entry:', error);
+      console.error('Error adding/updating entry:', error);
     }
   };
 
   const handleInputChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
+  };
+
+  const handleEdit = (item, type) => {
+    setSelectedItem(item);
+    setAddType(type);
+    setShowAddForm(true);
+    setFormData({
+      name: item.name || '',
+      subject: item.subject || '',
+      topic: item.topic || '',
+      attendancePercentage: item.attendancePercentage || '',
+    });
+  };
+
+  const handleDelete = async (id, type) => {
+    const url = `http://localhost:5000/api/${type}/${id}`;
+    const userId = localStorage.getItem('userId');
+    if (!userId) {
+      console.error('No userId found, delete aborted');
+      return;
+    }
+    try {
+      const response = await fetch(url, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', 'user-id': userId },
+      });
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`HTTP error! status: ${response.status}, message: ${errorText}`);
+      }
+      console.log(`Successfully deleted ${type} with id: ${id}`);
+      await fetchData(type); // Refresh the data after deletion
+    } catch (error) {
+      console.error(`Error deleting ${type} with id ${id}:`, error);
+    }
   };
 
   const renderAddForm = () => {
@@ -168,10 +204,10 @@ const Dashboard = () => {
     return (
       <div className="modal" onClick={closeModal}>
         <div className="modal-content" onClick={e => e.stopPropagation()}>
-          <h3>Add New {addType ? addType.replace('manage', '') : activeSection.replace('manage', '')}</h3>
+          <h3>{selectedItem ? 'Edit' : 'Add New'} {addType ? addType.replace('manage', '') : activeSection.replace('manage', '')}</h3>
           <form onSubmit={handleFormSubmit}>
             {formFields}
-            <button type="submit">Add</button>
+            <button type="submit">{selectedItem ? 'Update' : 'Add'}</button>
             <button type="button" onClick={closeModal}>Cancel</button>
           </form>
         </div>
@@ -180,56 +216,59 @@ const Dashboard = () => {
   };
 
   const renderModalContent = () => {
-    if (showModal.students) {
-      return (
+    const content = {
+      students: (
         <div className="modal-content">
           <h3>Students List</h3>
           <ul>
             {studentsData.map((student) => (
               <li key={student._id}>
                 {student.name} - Admission No: {student.admissionNo} - Attendance: {student.attendancePercentage}%
-                <button onClick={() => alert(`Edit ${student.name}'s details`)}>Edit</button>
+                <button onClick={() => handleEdit(student, 'students')}>Edit</button>
+                <button onClick={() => handleDelete(student._id, 'students')}>Delete</button>
               </li>
             ))}
           </ul>
           <button onClick={closeModal}>Close</button>
         </div>
-      );
-    } else if (showModal.teachers) {
-      return (
+      ),
+      teachers: (
         <div className="modal-content">
           <h3>Teachers List</h3>
           <ul>
             {teachersData.map((teacher) => (
               <li key={teacher._id}>
                 {teacher.name} - Subject: {teacher.subject}
+                <button onClick={() => handleEdit(teacher, 'teachers')}>Edit</button>
+                <button onClick={() => handleDelete(teacher._id, 'teachers')}>Delete</button>
               </li>
             ))}
           </ul>
           <button onClick={closeModal}>Close</button>
         </div>
-      );
-    } else if (showModal.classes) {
-      return (
+      ),
+      classes: (
         <div className="modal-content">
           <h3>Classes List</h3>
           <ul>
             {classesData.map((classItem) => (
               <li key={classItem._id}>
                 {classItem.name} - Subject: {classItem.subject}
+                <button onClick={() => handleEdit(classItem, 'classes')}>Edit</button>
+                <button onClick={() => handleDelete(classItem._id, 'classes')}>Delete</button>
               </li>
             ))}
           </ul>
           <button onClick={closeModal}>Close</button>
         </div>
-      );
-    }
-    return null;
+      ),
+    };
+    return showModal.students || showModal.teachers || showModal.classes ? content[Object.keys(showModal).find(key => showModal[key]) || 'students'] : null;
   };
 
   const handleBack = () => {
     console.log('Back button clicked, navigating to login');
-    localStorage.removeItem('userId'); // Clear user session
+    localStorage.removeItem('userId');
     navigate('/login');
   };
 
@@ -319,12 +358,10 @@ const Dashboard = () => {
                   <thead>
                     <tr>
                       <th>#</th>
-                      <th>First Name</th>
-                      <th>Last Name</th>
+                      <th>Name</th>
                       <th>Admission No</th>
                       <th>Class</th>
-                      <th>Session</th>
-                      <th>Term</th>
+                      <th>Attendance %</th>
                       <th>Status</th>
                       <th>Date</th>
                     </tr>
@@ -333,14 +370,12 @@ const Dashboard = () => {
                     {studentsData.slice(0, 3).map((student, index) => (
                       <tr key={student._id}>
                         <td>{index + 1}</td>
-                        <td>Jon</td>
-                        <td>Mbeeka</td>
+                        <td>{student.name}</td>
                         <td>{student.admissionNo}</td>
-                        <td>Nine</td>
-                        <td>2021/2022</td>
-                        <td>First</td>
+                        <td>{student.class}</td>
+                        <td>{student.attendancePercentage}%</td>
                         <td><span className="status present">Present</span></td>
-                        <td>2022-06-06</td>
+                        <td>{new Date(student.date || Date.now()).toLocaleDateString()}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -357,6 +392,7 @@ const Dashboard = () => {
                     <div className="card">
                       <h3>{classItem.name}</h3>
                       <p>Subject: {classItem.subject}</p>
+                      <button onClick={() => handleCategoryAdd('classes')}>Add</button>
                     </div>
                   </li>
                 ))}
@@ -372,6 +408,7 @@ const Dashboard = () => {
                     <div className="card">
                       <h3>{teacher.name}</h3>
                       <p>Subject: {teacher.subject}</p>
+                      <button onClick={() => handleCategoryAdd('teachers')}>Add</button>
                     </div>
                   </li>
                 ))}
@@ -387,7 +424,7 @@ const Dashboard = () => {
                     <div className="card">
                       <h3>{student.name}</h3>
                       <p>Admission No: {student.admissionNo} - Attendance: {student.attendancePercentage}%</p>
-                      <button onClick={() => alert(`Edit ${student.name}'s details`)}>Edit</button>
+                      <button onClick={() => handleCategoryAdd('students')}>Add</button>
                     </div>
                   </li>
                 ))}
